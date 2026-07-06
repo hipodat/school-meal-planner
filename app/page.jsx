@@ -45,6 +45,17 @@ export default function Page() {
   const [panel, setPanel] = useState(null); // 'nutrition' | 'order' | 'students'
   const [students, setStudents] = useState([]); // [{name, allergens:[]}]
   const [showHelp, setShowHelp] = useState(false); // 사용법 (기본 접힘)
+  const [deleted, setDeleted] = useState(() => new Set()); // 삭제한 날짜(dateKey) — 로컬 저장
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("deletedDays");
+      if (raw) setDeleted(new Set(JSON.parse(raw)));
+    } catch {}
+  }, []);
+  useEffect(() => {
+    try { localStorage.setItem("deletedDays", JSON.stringify([...deleted])); } catch {}
+  }, [deleted]);
 
   useEffect(() => {
     try {
@@ -64,6 +75,7 @@ export default function Page() {
 
   const days = useMemo(() => schoolDays(ym.y, ym.mo), [ym]);
   const dayData = (dk) => {
+    if (deleted.has(dk)) return null; // 삭제된 날은 급식 없음으로 표시
     const base = meals[dk] || generated[dk];
     if (edits[dk]) return { ...base, dishes: edits[dk] };
     return base;
@@ -125,10 +137,38 @@ export default function Page() {
       const j = await r.json();
       setGenerated(j.days || {});
       setGenInfo({ closedDays: j.closedDays || [], scheduleAvailable: j.scheduleAvailable });
+      clearMonthDeleted(); // 새로 편성하면 이 달의 삭제 표시 초기화
     } finally {
       setGenLoading(false);
     }
   }
+
+  // 현재 월의 삭제 표시 제거
+  const clearMonthDeleted = () => {
+    const prefix = `${ym.y}-${pad(ym.mo + 1)}-`;
+    setDeleted((p) => {
+      const s = new Set([...p].filter((dk) => !dk.startsWith(prefix)));
+      return s;
+    });
+  };
+
+  // 일자별 삭제
+  const deleteDay = (dk) => {
+    setDeleted((p) => new Set(p).add(dk));
+    setEdits((p) => { const n = { ...p }; delete n[dk]; return n; });
+    setSelected(null);
+  };
+
+  // 한 달 전체 삭제 (현재 보이는 월의 모든 급식일 숨김)
+  const deleteMonth = () => {
+    if (!window.confirm(`${ym.y}년 ${ym.mo + 1}월 식단을 전체 삭제할까요? ('AI 식단 자동 생성'으로 다시 편성할 수 있습니다.)`)) return;
+    setDeleted((p) => {
+      const s = new Set(p);
+      days.forEach(({ d }) => s.add(keyOf(ym.y, ym.mo, d)));
+      return s;
+    });
+    setSelected(null);
+  };
 
   const goMonth = (delta) => {
     let { y, mo } = ym; mo += delta;
@@ -148,9 +188,17 @@ export default function Page() {
 
   const setDishes = (dk, dishes) => setEdits((p) => ({ ...p, [dk]: dishes }));
 
+  // 삭제한 날을 제외한 생성 식단 (분석 대상)
+  const visibleGenerated = useMemo(() => {
+    if (!deleted.size) return generated;
+    const out = {};
+    for (const [k, v] of Object.entries(generated)) if (!deleted.has(k)) out[k] = v;
+    return out;
+  }, [generated, deleted]);
+
   // ① 영양기준 충족률 · ② 발주서/원가 (자동 생성 식단 기준)
-  const nutritionResult = useMemo(() => analyzeNutrition(generated, STANDARDS[grade]), [generated, grade]);
-  const orderResult = useMemo(() => buildOrderSheet(generated, headcount), [generated, headcount]);
+  const nutritionResult = useMemo(() => analyzeNutrition(visibleGenerated, STANDARDS[grade]), [visibleGenerated, grade]);
+  const orderResult = useMemo(() => buildOrderSheet(visibleGenerated, headcount), [visibleGenerated, headcount]);
   const perServing = useMemo(() => {
     const servings = headcount * orderResult.mealDays;
     return servings ? Math.round(orderResult.totalCost / servings) : 0;
@@ -290,6 +338,10 @@ export default function Page() {
             {Object.keys(generated).length > 0 && (
               <button className="no-print" onClick={() => generateMenu(true)} disabled={genLoading} style={btn(false)}>재생성</button>
             )}
+            {(Object.keys(generated).length > 0 || Object.keys(meals).length > 0) && (
+              <button className="no-print" onClick={deleteMonth}
+                style={{ ...btn(false), color: C.red, borderColor: C.redSoft }}>🗑️ 한달 전체 삭제</button>
+            )}
           </div>
           {msg && <div style={{ ...wrap(), color: C.sub, fontSize: 13, paddingTop: 0 }}>{msg}</div>}
           {Object.keys(generated).length > 0 && (
@@ -370,7 +422,8 @@ export default function Page() {
       {selected && selData && (
         <DayEditor dateKey={selected} data={selData} highlight={highlight} C={C}
           onClose={() => setSelected(null)}
-          onChange={(dishes) => setDishes(selected, dishes)} />
+          onChange={(dishes) => setDishes(selected, dishes)}
+          onDelete={() => deleteDay(selected)} />
       )}
     </div>
   );
@@ -428,7 +481,7 @@ function Cell({ day, ym, dayData, highlight, onPick, C }) {
   );
 }
 
-function DayEditor({ dateKey, data, highlight, onClose, onChange, C }) {
+function DayEditor({ dateKey, data, highlight, onClose, onChange, onDelete, C }) {
   const [y, mo, d] = dateKey.split("-").map(Number);
   const wd = WD[new Date(y, mo - 1, d).getDay()];
   const [text, setText] = useState("");
@@ -455,7 +508,11 @@ function DayEditor({ dateKey, data, highlight, onClose, onChange, C }) {
               <span style={{ fontSize: 11, fontWeight: 700, color: C.amber, background: C.amberSoft, borderRadius: 8, padding: "2px 6px" }}>AI 추천 식단</span>
             )}
           </span>
-          <button onClick={onClose} style={{ ...nav(), border: "none" }}>✕</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button onClick={() => { if (window.confirm(`${mo}월 ${d}일 식단을 삭제할까요?`)) onDelete(); }}
+              style={{ fontSize: 13, fontWeight: 600, padding: "6px 10px", borderRadius: 9, border: `1px solid ${C.redSoft}`, background: C.redSoft, color: C.red }}>🗑️ 이 날 삭제</button>
+            <button onClick={onClose} style={{ ...nav(), border: "none" }}>✕</button>
+          </div>
         </div>
         {data.kcal ? <div style={{ color: C.sub, fontSize: 13, marginTop: 2 }}>총 {data.kcal} kcal{data.generated ? " (예상)" : ""}</div> : null}
 

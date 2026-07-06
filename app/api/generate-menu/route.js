@@ -69,7 +69,9 @@ export async function POST(request) {
   }
 
   const { closed, available } = await loadClosedDays(args);
-  const menu = generateMonthMenu({ year, month, excludeDates: closed });
+  // 재생성 시에는 매번 다른 시드로 새 식단을 만든다. 최초 생성은 연·월 고정 시드(재현 가능).
+  const seed = regenerate ? Math.floor(Math.random() * 1e9) : undefined;
+  const menu = generateMonthMenu({ year, month, excludeDates: closed, seed });
   menu.closedDays = closed;
   menu.scheduleAvailable = available;
 
