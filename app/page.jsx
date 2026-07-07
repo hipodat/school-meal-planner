@@ -126,7 +126,11 @@ export default function Page() {
       .then((j) => {
         if (ignore) return;
         setGenerated(j.days || {});
-        setGenInfo(j.generatedAt ? { closedDays: j.closedDays || [], scheduleAvailable: j.scheduleAvailable } : null);
+        setGenInfo(j.generatedAt ? {
+          closedDays: j.closedDays || [],
+          scheduleAvailable: j.scheduleAvailable,
+          referenceInfo: j.referenceInfo || null,
+        } : null);
       })
       .catch(() => {});
     return () => { ignore = true; };
@@ -146,7 +150,11 @@ export default function Page() {
       });
       const j = await r.json();
       setGenerated(j.days || {});
-      setGenInfo({ closedDays: j.closedDays || [], scheduleAvailable: j.scheduleAvailable });
+      setGenInfo({
+        closedDays: j.closedDays || [],
+        scheduleAvailable: j.scheduleAvailable,
+        referenceInfo: j.referenceInfo || null,
+      });
       clearMonthDeleted(); // 새로 편성하면 이 달의 삭제 표시 초기화
     } finally {
       setGenLoading(false);
@@ -360,6 +368,12 @@ export default function Page() {
               {genInfo && (genInfo.scheduleAvailable
                 ? <div style={{ color: C.green }}>📅 학사일정을 반영해 방학·휴업일·공휴일{genInfo.closedDays.length ? ` (${genInfo.closedDays.length}일)` : ""}은 자동으로 제외했습니다.</div>
                 : <div style={{ color: C.sub }}>📅 이 학교의 학사일정이 아직 나이스에 등록되지 않아 방학 자동 제외는 적용되지 않았습니다. (주말·법정공휴일만 제외)</div>)}
+              {genInfo?.referenceInfo && (
+                <div style={{ color: C.sub }}>
+                  인근지역 초등학교 {genInfo.referenceInfo.schoolCount}곳의 {genInfo.referenceInfo.year}년 {genInfo.referenceInfo.month}월 실제 식단 메뉴 {genInfo.referenceInfo.dishCount}개를 참고해 다양성을 보강했습니다.
+                  {genInfo.referenceInfo.fallbackUsed ? " (올해 자료가 없어 작년 같은 달을 참고)" : ""}
+                </div>
+              )}
             </div>
           )}
 
