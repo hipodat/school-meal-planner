@@ -3,17 +3,41 @@ import { promises as fs } from "fs";
 import path from "path";
 import { generateMonthMenu } from "../../../lib/menuGenerator.js";
 import { fetchClosedDays } from "../../../lib/neis.js";
+import { validateMenuParams } from "../../../lib/requestValidation.js";
 
 const DIR = path.join(process.cwd(), "data", "generated-menus");
+const RESOLVED_DIR = path.resolve(DIR);
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMIT_MAX = 20;
+const rateBuckets = new Map();
 
 function pad(n) {
   return String(n).padStart(2, "0");
 }
 
+function clientKey(request) {
+  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+}
+
+function isRateLimited(key) {
+  const now = Date.now();
+  const bucket = rateBuckets.get(key);
+  if (!bucket || now - bucket.startedAt > RATE_LIMIT_WINDOW_MS) {
+    rateBuckets.set(key, { startedAt: now, count: 1 });
+    return false;
+  }
+  bucket.count += 1;
+  return bucket.count > RATE_LIMIT_MAX;
+}
+
 // 학교별로 방학이 다르므로 파일명에 학교코드를 포함한다.
 function fileFor({ eduCode, schoolCode, year, month }) {
   const school = eduCode && schoolCode ? `${eduCode}-${schoolCode}` : "default";
-  return path.join(DIR, `${school}_${year}-${pad(month)}.json`);
+  const filePath = path.resolve(DIR, `${school}_${year}-${pad(month)}.json`);
+  if (!filePath.startsWith(`${RESOLVED_DIR}${path.sep}`)) {
+    throw new Error("Invalid generated menu path");
+  }
+  return filePath;
 }
 
 async function readSaved(args) {
@@ -43,22 +67,28 @@ export async function GET(request) {
   const month = Number(p.get("month"));
   const eduCode = p.get("eduCode");
   const schoolCode = p.get("schoolCode");
-  if (!year || !month) {
-    return NextResponse.json({ error: "year, month 파라미터가 필요합니다." }, { status: 400 });
+  const validationError = validateMenuParams({ year, month, eduCode, schoolCode });
+  if (validationError) {
+    return NextResponse.json({ error: validationError }, { status: 400 });
   }
   const saved = await readSaved({ eduCode, schoolCode, year, month });
   return NextResponse.json(saved || { days: {}, generatedAt: null });
 }
 
 export async function POST(request) {
+  if (isRateLimited(clientKey(request))) {
+    return NextResponse.json({ error: "요청이 너무 많습니다. 잠시 후 다시 시도하세요." }, { status: 429 });
+  }
+
   const body = await request.json().catch(() => ({}));
   const year = Number(body.year);
   const month = Number(body.month);
   const eduCode = body.eduCode || null;
   const schoolCode = body.schoolCode || null;
   const regenerate = Boolean(body.regenerate);
-  if (!year || !month) {
-    return NextResponse.json({ error: "year, month 파라미터가 필요합니다." }, { status: 400 });
+  const validationError = validateMenuParams({ year, month, eduCode, schoolCode });
+  if (validationError) {
+    return NextResponse.json({ error: validationError }, { status: 400 });
   }
 
   const args = { eduCode, schoolCode, year, month };

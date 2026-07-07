@@ -23,6 +23,12 @@ const allergensOf = (day) => {
   (day?.dishes || []).forEach((x) => x.allergens.forEach((a) => s.add(a)));
   return [...s].sort((a, b) => a - b);
 };
+const csvCell = (value) => {
+  let text = String(value ?? "");
+  if (/^[=+\-@]/.test(text)) text = `'${text}`;
+  return `"${text.replaceAll('"', '""')}"`;
+};
+const csvFromRows = (rows) => `\uFEFF${rows.map((r) => r.map(csvCell).join(",")).join("\n")}`;
 
 export default function Page() {
   const today = new Date();
@@ -95,9 +101,8 @@ export default function Page() {
     setLoading(true); setMsg("");
     const from = ymd(keyOf(ym.y, ym.mo, 1));
     const to = ymd(keyOf(ym.y, ym.mo, new Date(ym.y, ym.mo + 1, 0).getDate()));
-    const r = await fetch(
-      `/api/meals?eduCode=${school.eduCode}&schoolCode=${school.schoolCode}&from=${from}&to=${to}`
-    );
+    const q = new URLSearchParams({ eduCode: school.eduCode, schoolCode: school.schoolCode, from, to });
+    const r = await fetch(`/api/meals?${q}`);
     const j = await r.json();
     setLoading(false);
     if (j.error) { setMsg(j.error); setMeals({}); return; }
@@ -110,7 +115,12 @@ export default function Page() {
   useEffect(() => {
     let ignore = false;
     if (!school) { setGenerated({}); setGenInfo(null); return; }
-    const q = `year=${ym.y}&month=${ym.mo + 1}&eduCode=${school.eduCode}&schoolCode=${school.schoolCode}`;
+    const q = new URLSearchParams({
+      year: String(ym.y),
+      month: String(ym.mo + 1),
+      eduCode: school.eduCode,
+      schoolCode: school.schoolCode,
+    });
     fetch(`/api/generate-menu?${q}`)
       .then((r) => r.json())
       .then((j) => {
@@ -178,13 +188,13 @@ export default function Page() {
   const toggleHi = (n) => setHighlight((p) => { const s = new Set(p); s.has(n) ? s.delete(n) : s.add(n); return s; });
 
   // 추천: 이 달에 등장 빈도가 낮은/없는 메뉴 우선 (같은 요리명 기준)
-  const recommend = () => {
+  const recommendedMenus = useMemo(() => {
     const count = {};
     Object.values(meals).forEach((day) =>
       (day?.dishes || []).forEach((x) => { count[x.name] = (count[x.name] || 0) + 1; })
     );
     return Object.entries(count).sort((a, b) => a[1] - b[1]).slice(0, 8);
-  };
+  }, [meals]);
 
   const setDishes = (dk, dishes) => setEdits((p) => ({ ...p, [dk]: dishes }));
 
@@ -226,7 +236,7 @@ export default function Page() {
     const rows = [["식재료", "1인소요(g)", "총소요(kg)", "총소요(g)", "예상금액(원)"]];
     orderResult.rows.forEach((r) => rows.push([r.name, r.perPersonG, r.totalKg, r.totalG, r.cost]));
     rows.push(["합계", "", "", "", orderResult.totalCost]);
-    const csv = "﻿" + rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
+    const csv = csvFromRows(rows);
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
     const a = document.createElement("a");
     a.href = url; a.download = `발주서_${school?.name || ""}_${ym.y}-${pad(ym.mo + 1)}.csv`; a.click();
@@ -245,7 +255,7 @@ export default function Page() {
         allergensOf(dd).map((a) => `${a}.${ALLERGENS[a]}`).join(" "),
       ]);
     });
-    const csv = "\uFEFF" + rows.map((r) => r.map((c) => `"${c}"`).join(",")).join("\n");
+    const csv = csvFromRows(rows);
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
     const a = document.createElement("a");
     a.href = url; a.download = `급식식단표_${ym.y}-${pad(ym.mo + 1)}.csv`; a.click();
@@ -403,12 +413,12 @@ export default function Page() {
             <div className="no-print" style={{ marginTop: 20, padding: 14, background: C.greenSoft, border: `1px solid ${C.greenLine}`, borderRadius: 12 }}>
               <b style={{ color: C.green, fontSize: 14 }}>✨ 이번 달 적게 나온 메뉴 (다음 편성 참고)</b>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
-                {recommend().map(([name, c]) => (
+                {recommendedMenus.map(([name, c]) => (
                   <span key={name} style={{ fontSize: 13, background: C.surface, border: `1px solid ${C.greenLine}`, borderRadius: 20, padding: "4px 10px" }}>
                     {name} <span style={{ color: C.sub, fontSize: 11 }}>{c}회</span>
                   </span>
                 ))}
-                {recommend().length === 0 && <span style={{ color: C.sub, fontSize: 13 }}>데이터를 불러오면 표시됩니다.</span>}
+                {recommendedMenus.length === 0 && <span style={{ color: C.sub, fontSize: 13 }}>데이터를 불러오면 표시됩니다.</span>}
               </div>
             </div>
           </main>
